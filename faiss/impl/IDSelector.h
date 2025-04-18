@@ -23,6 +23,12 @@ struct IDSelector {
     virtual ~IDSelector() {}
 };
 
+struct IDSelectorBitmapUserDefine : IDSelector {
+    // false count in bitmap
+    virtual int64_t false_count() const = 0;
+    virtual ~IDSelectorBitmapUserDefine() {}
+};
+
 /** ids between [imin, imax) */
 struct IDSelectorRange : IDSelector {
     idx_t imin, imax;

@@ -46,6 +46,7 @@ struct HNSWStats;
 struct SearchParametersHNSW : SearchParameters {
     int efSearch = 16;
     bool check_relative_distance = true;
+    bool need_brute_force = false;
 
     ~SearchParametersHNSW() {}
 };

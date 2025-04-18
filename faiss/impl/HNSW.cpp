@@ -21,6 +21,8 @@ namespace faiss {
  * HNSW structure implementation
  **************************************************************/
 
+constexpr float kHnswSearchBFFilterThreshold = 0.93f;
+
 int HNSW::nb_neighbors(int layer_no) const {
     return cum_nneighbor_per_level[layer_no + 1] -
             cum_nneighbor_per_level[layer_no];
@@ -528,6 +530,29 @@ int search_from_candidates(
                                : hnsw.check_relative_distance;
     int efSearch = params ? params->efSearch : hnsw.efSearch;
     const IDSelector* sel = params ? params->sel : nullptr;
+    bool need_brute_force = params ? params->need_brute_force : false;
+
+    const size_t ntotal = vt.visited.size();
+    if (sel) {
+        const IDSelectorBitmapUserDefine* bitmap_user_define_sel = dynamic_cast<const IDSelectorBitmapUserDefine*>(sel);
+        if (need_brute_force && bitmap_user_define_sel) {
+            FAISS_THROW_IF_NOT(nres_in == 0);
+            if (bitmap_user_define_sel->false_count() >= (ntotal * kHnswSearchBFFilterThreshold)) {
+                // fallback to brute-force search
+                for (int i = 0; i < ntotal; ++i) {
+                    if (!sel || sel->is_member(i)) {
+                        float d = qdis(i);
+                        if (nres < k) {
+                            faiss::maxheap_push(++nres, D, I, d, i);
+                        } else if (d < D[0]) {
+                            faiss::maxheap_replace_top(nres, D, I, d, i);
+                        }
+                    }
+                }
+                return nres;
+            }
+        }
+    }
 
     for (int i = 0; i < candidates.size(); i++) {
         idx_t v1 = candidates.ids[i];
@@ -595,6 +620,26 @@ int search_from_candidates(
             stats.n2++;
         }
         stats.n3 += ndis;
+    }
+
+    // switch to brute-force when insufficient k
+    if (need_brute_force && nres < k) {
+        FAISS_THROW_IF_NOT(nres_in == 0);
+        for (int i = 0; i < k; ++i) {
+            I[i] = -1;
+            D[i] = -1;
+        }
+        nres = 0;
+        for (int i = 0; i < ntotal; ++i) {
+            if (!sel || sel->is_member(i)) {
+                float d = qdis(i);
+                if (nres < k) {
+                    faiss::maxheap_push(++nres, D, I, d, i);
+                } else if (d < D[0]) {
+                    faiss::maxheap_replace_top(nres, D, I, d, i);
+                }
+            }
+        }
     }
 
     return nres;
