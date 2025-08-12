@@ -531,6 +531,7 @@ int search_from_candidates(
     int efSearch = params ? params->efSearch : hnsw.efSearch;
     const IDSelector* sel = params ? params->sel : nullptr;
     bool need_brute_force = params ? params->need_brute_force : false;
+    bool need_brute_force_when_insufficient = params ? params->need_brute_force_when_insufficient : false;
 
     const size_t ntotal = vt.visited.size();
     if (sel) {
@@ -548,6 +549,9 @@ int search_from_candidates(
                             faiss::maxheap_replace_top(nres, D, I, d, i);
                         }
                     }
+                }
+                if (params != nullptr && params->do_brute_force != nullptr) {
+                    *params->do_brute_force = true;
                 }
                 return nres;
             }
@@ -623,7 +627,7 @@ int search_from_candidates(
     }
 
     // switch to brute-force when insufficient k
-    if (need_brute_force && nres < k) {
+    if (need_brute_force_when_insufficient && nres < k) {
         FAISS_THROW_IF_NOT(nres_in == 0);
         for (int i = 0; i < k; ++i) {
             I[i] = -1;
@@ -639,6 +643,9 @@ int search_from_candidates(
                     faiss::maxheap_replace_top(nres, D, I, d, i);
                 }
             }
+        }
+        if (params != nullptr && params->do_brute_force != nullptr) {
+            *params->do_brute_force = true;
         }
     }
 
