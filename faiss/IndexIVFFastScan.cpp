@@ -206,8 +206,13 @@ void estimators_from_tables_generic(
         size_t k,
         typename C::T* heap_dis,
         int64_t* heap_ids,
-        const Scaler& scaler) {
+        const Scaler& scaler,
+        const IDSelector* sel) {
     using accu_t = typename C::T;
+    const IDSelectorBitmapUserDefine* bitmap_user_define_sel = nullptr;
+    if (sel != nullptr) {
+        bitmap_user_define_sel = dynamic_cast<const IDSelectorBitmapUserDefine*>(sel);
+    } 
     for (size_t j = 0; j < ncodes; ++j) {
         BitstringReader bsr(codes + j * index.code_size, index.code_size);
         accu_t dis = bias;
@@ -223,7 +228,9 @@ void estimators_from_tables_generic(
             dis += scaler.scale_one(dt[c]);
             dt += index.ksub;
         }
-
+        if (bitmap_user_define_sel && !bitmap_user_define_sel->is_member(ids[j])) { 
+            continue;
+        }
         if (C::cmp(heap_dis[0], dis)) {
             heap_pop<C>(k, heap_dis, heap_ids);
             heap_push<C>(k, heap_dis, heap_ids, dis, ids[j]);
@@ -305,15 +312,24 @@ void IndexIVFFastScan::search(
         float* distances,
         idx_t* labels,
         const SearchParameters* params) const {
-    FAISS_THROW_IF_NOT_MSG(
-            !params, "search params not supported for this index");
+    // FAISS_THROW_IF_NOT_MSG(
+    //         !params, "search params not supported for this index");
     FAISS_THROW_IF_NOT(k > 0);
+
+    const SearchParametersIVF* ivf_params = nullptr;
+    size_t nprobe = std::min(nlist, this->nprobe);
+    if (params) {
+        ivf_params = dynamic_cast<const SearchParametersIVF*>(params);
+        FAISS_THROW_IF_NOT_MSG(ivf_params, "invalid search params");
+
+        nprobe = std::min(nlist, params ? ivf_params->nprobe : this->nprobe);
+    }
 
     DummyScaler scaler;
     if (metric_type == METRIC_L2) {
-        search_dispatch_implem<true>(n, x, k, distances, labels, scaler);
+        search_dispatch_implem<true>(n, x, k, distances, labels, scaler, nprobe, params ? params->sel : nullptr);
     } else {
-        search_dispatch_implem<false>(n, x, k, distances, labels, scaler);
+        search_dispatch_implem<false>(n, x, k, distances, labels, scaler, nprobe, params ? params->sel : nullptr);
     }
 }
 
@@ -333,7 +349,9 @@ void IndexIVFFastScan::search_dispatch_implem(
         idx_t k,
         float* distances,
         idx_t* labels,
-        const Scaler& scaler) const {
+        const Scaler& scaler,
+        size_t nprobe,
+        const IDSelector* sel) const {
     using Cfloat = typename std::conditional<
             is_max,
             CMax<float, int64_t>,
@@ -363,9 +381,9 @@ void IndexIVFFastScan::search_dispatch_implem(
     }
 
     if (impl == 1) {
-        search_implem_1<Cfloat>(n, x, k, distances, labels, scaler);
+        search_implem_1<Cfloat>(n, x, k, distances, labels, scaler, nprobe, sel);
     } else if (impl == 2) {
-        search_implem_2<C>(n, x, k, distances, labels, scaler);
+        search_implem_2<C>(n, x, k, distances, labels, scaler, nprobe, sel);
 
     } else if (impl >= 10 && impl <= 15) {
         size_t ndis = 0, nlist_visited = 0;
@@ -381,9 +399,11 @@ void IndexIVFFastScan::search_dispatch_implem(
                         impl,
                         &ndis,
                         &nlist_visited,
-                        scaler);
+                        scaler,
+                        nprobe,
+                        sel);
             } else if (impl == 14 || impl == 15) {
-                search_implem_14<C>(n, x, k, distances, labels, impl, scaler);
+                search_implem_14<C>(n, x, k, distances, labels, impl, scaler, nprobe, sel);
             } else {
                 search_implem_10<C>(
                         n,
@@ -394,7 +414,9 @@ void IndexIVFFastScan::search_dispatch_implem(
                         impl,
                         &ndis,
                         &nlist_visited,
-                        scaler);
+                        scaler,
+                        nprobe,
+                        sel);
             }
         } else {
             // explicitly slice over threads
@@ -420,7 +442,7 @@ void IndexIVFFastScan::search_dispatch_implem(
             if (impl == 14 ||
                 impl == 15) { // this might require slicing if there are too
                               // many queries (for now we keep this simple)
-                search_implem_14<C>(n, x, k, distances, labels, impl, scaler);
+                search_implem_14<C>(n, x, k, distances, labels, impl, scaler, nprobe, sel);
             } else {
 #pragma omp parallel for reduction(+ : ndis, nlist_visited)
                 for (int slice = 0; slice < nslice; slice++) {
@@ -438,7 +460,9 @@ void IndexIVFFastScan::search_dispatch_implem(
                                 impl,
                                 &ndis,
                                 &nlist_visited,
-                                scaler);
+                                scaler,
+                                nprobe,
+                                sel);
                     } else {
                         search_implem_10<C>(
                                 i1 - i0,
@@ -449,7 +473,9 @@ void IndexIVFFastScan::search_dispatch_implem(
                                 impl,
                                 &ndis,
                                 &nlist_visited,
-                                scaler);
+                                scaler,
+                                nprobe,
+                                sel);
                     }
                 }
             }
@@ -469,7 +495,9 @@ void IndexIVFFastScan::search_implem_1(
         idx_t k,
         float* distances,
         idx_t* labels,
-        const Scaler& scaler) const {
+        const Scaler& scaler,
+        size_t nprobe,
+        const IDSelector* sel) const {
     FAISS_THROW_IF_NOT(orig_invlists);
 
     std::unique_ptr<idx_t[]> coarse_ids(new idx_t[n * nprobe]);
@@ -522,7 +550,8 @@ void IndexIVFFastScan::search_implem_1(
                     k,
                     heap_dis,
                     heap_ids,
-                    scaler);
+                    scaler,
+                    sel);
             nlist_visited++;
             ndis++;
         }
@@ -540,7 +569,9 @@ void IndexIVFFastScan::search_implem_2(
         idx_t k,
         float* distances,
         idx_t* labels,
-        const Scaler& scaler) const {
+        const Scaler& scaler,
+        size_t nprobe,
+        const IDSelector* sel) const {
     FAISS_THROW_IF_NOT(orig_invlists);
 
     std::unique_ptr<idx_t[]> coarse_ids(new idx_t[n * nprobe]);
@@ -602,7 +633,8 @@ void IndexIVFFastScan::search_implem_2(
                     k,
                     heap_dis,
                     heap_ids,
-                    scaler);
+                    scaler,
+                    sel);
 
             nlist_visited++;
             ndis += ls;
@@ -636,7 +668,9 @@ void IndexIVFFastScan::search_implem_10(
         int impl,
         size_t* ndis_out,
         size_t* nlist_out,
-        const Scaler& scaler) const {
+        const Scaler& scaler,
+        size_t nprobe,
+        const IDSelector* sel) const {
     memset(distances, -1, sizeof(float) * k * n);
     memset(labels, -1, sizeof(idx_t) * k * n);
 
@@ -695,7 +729,7 @@ void IndexIVFFastScan::search_implem_10(
             } else {
                 FAISS_THROW_MSG("invalid");
             }
-
+            handler->set_sel(sel);
             handler->q_map = qmap1;
 
             if (single_LUT) {
@@ -757,7 +791,9 @@ void IndexIVFFastScan::search_implem_12(
         int impl,
         size_t* ndis_out,
         size_t* nlist_out,
-        const Scaler& scaler) const {
+        const Scaler& scaler,
+        size_t nprobe,
+        const IDSelector* sel) const {
     if (n == 0) { // does not work well with reservoir
         return;
     }
@@ -833,7 +869,7 @@ void IndexIVFFastScan::search_implem_12(
     } else if (impl == 13) {
         handler.reset(new ReservoirHC(n, 0, k, 2 * k));
     }
-
+    handler->set_sel(sel);
     int qbs2 = this->qbs2 ? this->qbs2 : 11;
 
     std::vector<uint16_t> tmp_bias;
@@ -952,7 +988,9 @@ void IndexIVFFastScan::search_implem_14(
         float* distances,
         idx_t* labels,
         int impl,
-        const Scaler& scaler) const {
+        const Scaler& scaler,
+        size_t nprobe,
+        const IDSelector* sel) const {
     if (n == 0) { // does not work well with reservoir
         return;
     }
@@ -1097,7 +1135,7 @@ void IndexIVFFastScan::search_implem_14(
         } else if (impl == 15) {
             handler.reset(new ReservoirHC(n, 0, k, 2 * k));
         }
-
+        handler->set_sel(sel);
         int qbs2 = this->qbs2 ? this->qbs2 : 11;
 
         std::vector<uint16_t> tmp_bias;
@@ -1278,7 +1316,9 @@ template void IndexIVFFastScan::search_dispatch_implem<true, NormTableScaler>(
         idx_t k,
         float* distances,
         idx_t* labels,
-        const NormTableScaler& scaler) const;
+        const NormTableScaler& scaler,
+        size_t nprobe,
+        const IDSelector* sel) const;
 
 template void IndexIVFFastScan::search_dispatch_implem<false, NormTableScaler>(
         idx_t n,
@@ -1286,6 +1326,8 @@ template void IndexIVFFastScan::search_dispatch_implem<false, NormTableScaler>(
         idx_t k,
         float* distances,
         idx_t* labels,
-        const NormTableScaler& scaler) const;
+        const NormTableScaler& scaler,
+        size_t nprobe,
+        const IDSelector* sel) const;
 
 } // namespace faiss

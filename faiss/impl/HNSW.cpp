@@ -611,7 +611,6 @@ int search_from_candidates(
             }
             candidates.push(v1, d);
         }
-
         nstep++;
         if (!do_dis_check && nstep > efSearch) {
             break;

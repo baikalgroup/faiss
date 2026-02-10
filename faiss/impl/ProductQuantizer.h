@@ -18,6 +18,7 @@
 #include <faiss/impl/Quantizer.h>
 #include <faiss/impl/platform_macros.h>
 #include <faiss/utils/Heap.h>
+#include <faiss/impl/IDSelector.h>
 
 namespace faiss {
 
@@ -148,7 +149,8 @@ struct ProductQuantizer : Quantizer {
             const uint8_t* codes,
             const size_t ncodes,
             float_maxheap_array_t* res,
-            bool init_finalize_heap = true) const;
+            bool init_finalize_heap = true,
+            const IDSelector* sel = nullptr) const;
 
     /** same as search, but with inner product similarity */
     void search_ip(
@@ -157,7 +159,8 @@ struct ProductQuantizer : Quantizer {
             const uint8_t* codes,
             const size_t ncodes,
             float_minheap_array_t* res,
-            bool init_finalize_heap = true) const;
+            bool init_finalize_heap = true,
+            const IDSelector* sel = nullptr) const;
 
     /// Symmetric Distance Table
     std::vector<float> sdc_table;

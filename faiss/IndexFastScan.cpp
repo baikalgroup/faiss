@@ -167,9 +167,13 @@ void estimators_from_tables_generic(
         size_t k,
         typename C::T* heap_dis,
         int64_t* heap_ids,
-        const Scaler& scaler) {
+        const Scaler& scaler,
+        const IDSelector* sel) {
     using accu_t = typename C::T;
-
+    const IDSelectorBitmapUserDefine* bitmap_user_define_sel = nullptr;
+    if (sel != nullptr) {
+        bitmap_user_define_sel = dynamic_cast<const IDSelectorBitmapUserDefine*>(sel);
+    } 
     for (size_t j = 0; j < ncodes; ++j) {
         BitstringReader bsr(codes + j * index.code_size, index.code_size);
         accu_t dis = 0;
@@ -185,7 +189,9 @@ void estimators_from_tables_generic(
             dis += scaler.scale_one(dt[c]);
             dt += index.ksub;
         }
-
+        if (bitmap_user_define_sel && !bitmap_user_define_sel->is_member(j)) { 
+            continue;
+        }
         if (C::cmp(heap_dis[0], dis)) {
             heap_pop<C>(k, heap_dis, heap_ids);
             heap_push<C>(k, heap_dis, heap_ids, dis, j);
@@ -237,15 +243,15 @@ void IndexFastScan::search(
         float* distances,
         idx_t* labels,
         const SearchParameters* params) const {
-    FAISS_THROW_IF_NOT_MSG(
-            !params, "search params not supported for this index");
+    // FAISS_THROW_IF_NOT_MSG(
+    //         !params, "search params not supported for this index");
     FAISS_THROW_IF_NOT(k > 0);
-
+    
     DummyScaler scaler;
     if (metric_type == METRIC_L2) {
-        search_dispatch_implem<true>(n, x, k, distances, labels, scaler);
+        search_dispatch_implem<true>(n, x, k, distances, labels, scaler, params ? params->sel : nullptr);
     } else {
-        search_dispatch_implem<false>(n, x, k, distances, labels, scaler);
+        search_dispatch_implem<false>(n, x, k, distances, labels, scaler, params ? params->sel : nullptr);
     }
 }
 
@@ -256,7 +262,8 @@ void IndexFastScan::search_dispatch_implem(
         idx_t k,
         float* distances,
         idx_t* labels,
-        const Scaler& scaler) const {
+        const Scaler& scaler,
+        const IDSelector* sel) const {
     using Cfloat = typename std::conditional<
             is_max,
             CMax<float, int64_t>,
@@ -287,13 +294,13 @@ void IndexFastScan::search_dispatch_implem(
         FAISS_THROW_MSG("not implemented");
     } else if (implem == 2 || implem == 3 || implem == 4) {
         FAISS_THROW_IF_NOT(orig_codes != nullptr);
-        search_implem_234<Cfloat>(n, x, k, distances, labels, scaler);
+        search_implem_234<Cfloat>(n, x, k, distances, labels, scaler, sel);
     } else if (impl >= 12 && impl <= 15) {
         FAISS_THROW_IF_NOT(ntotal < INT_MAX);
         int nt = std::min(omp_get_max_threads(), int(n));
         if (nt < 2) {
             if (impl == 12 || impl == 13) {
-                search_implem_12<C>(n, x, k, distances, labels, impl, scaler);
+                search_implem_12<C>(n, x, k, distances, labels, impl, scaler, sel);
             } else {
                 search_implem_14<C>(n, x, k, distances, labels, impl, scaler);
             }
@@ -307,7 +314,7 @@ void IndexFastScan::search_dispatch_implem(
                 idx_t* lab_i = labels + i0 * k;
                 if (impl == 12 || impl == 13) {
                     search_implem_12<C>(
-                            i1 - i0, x + i0 * d, k, dis_i, lab_i, impl, scaler);
+                            i1 - i0, x + i0 * d, k, dis_i, lab_i, impl, scaler, sel);
                 } else {
                     search_implem_14<C>(
                             i1 - i0, x + i0 * d, k, dis_i, lab_i, impl, scaler);
@@ -326,7 +333,8 @@ void IndexFastScan::search_implem_234(
         idx_t k,
         float* distances,
         idx_t* labels,
-        const Scaler& scaler) const {
+        const Scaler& scaler,
+        const IDSelector* sel) const {
     FAISS_THROW_IF_NOT(implem == 2 || implem == 3 || implem == 4);
 
     const size_t dim12 = ksub * M;
@@ -363,7 +371,8 @@ void IndexFastScan::search_implem_234(
                 k,
                 heap_dis,
                 heap_ids,
-                scaler);
+                scaler,
+                sel);
 
         heap_reorder<Cfloat>(k, heap_dis, heap_ids);
 
@@ -386,7 +395,8 @@ void IndexFastScan::search_implem_12(
         float* distances,
         idx_t* labels,
         int impl,
-        const Scaler& scaler) const {
+        const Scaler& scaler,
+        const IDSelector* sel) const {
     FAISS_THROW_IF_NOT(bbs == 32);
 
     // handle qbs2 blocking by recursive call
@@ -401,7 +411,8 @@ void IndexFastScan::search_implem_12(
                     distances + i0 * k,
                     labels + i0 * k,
                     impl,
-                    scaler);
+                    scaler,
+                    sel);
         }
         return;
     }
@@ -434,6 +445,7 @@ void IndexFastScan::search_implem_12(
 
     if (k == 1) {
         SingleResultHandler<C> handler(n, ntotal);
+        handler.set_sel(sel);
         if (skip & 4) {
             // pass
         } else {
@@ -453,6 +465,7 @@ void IndexFastScan::search_implem_12(
         } else {
             HeapHandler<C> handler(
                     n, tmp_dis.data(), tmp_ids.data(), k, ntotal);
+            handler.set_sel(sel);
             handler.disable = bool(skip & 2);
 
             pq4_accumulate_loop_qbs(
@@ -467,7 +480,7 @@ void IndexFastScan::search_implem_12(
 
         ReservoirHandler<C> handler(n, ntotal, k, 2 * k);
         handler.disable = bool(skip & 2);
-
+        handler.set_sel(sel);
         if (skip & 4) {
             // skip
         } else {
@@ -606,7 +619,8 @@ template void IndexFastScan::search_dispatch_implem<true, NormTableScaler>(
         idx_t k,
         float* distances,
         idx_t* labels,
-        const NormTableScaler& scaler) const;
+        const NormTableScaler& scaler,
+        const IDSelector* sel) const;
 
 template void IndexFastScan::search_dispatch_implem<false, NormTableScaler>(
         idx_t n,
@@ -614,7 +628,8 @@ template void IndexFastScan::search_dispatch_implem<false, NormTableScaler>(
         idx_t k,
         float* distances,
         idx_t* labels,
-        const NormTableScaler& scaler) const;
+        const NormTableScaler& scaler,
+        const IDSelector* sel) const;
 
 void IndexFastScan::reconstruct(idx_t key, float* recons) const {
     std::vector<uint8_t> code(code_size, 0);
