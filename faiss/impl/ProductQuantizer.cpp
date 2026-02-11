@@ -554,8 +554,18 @@ void pq_estimators_from_tables_Mmul4(
         size_t ksub,
         size_t k,
         float* heap_dis,
-        int64_t* heap_ids) {
+        int64_t* heap_ids,
+        const IDSelector* sel) {
+    const IDSelectorBitmapUserDefine* bitmap_user_define_sel = nullptr;
+    if (sel != nullptr) {
+        bitmap_user_define_sel = dynamic_cast<const IDSelectorBitmapUserDefine*>(sel);
+    } 
     for (size_t j = 0; j < ncodes; j++) {
+        if (bitmap_user_define_sel && !bitmap_user_define_sel->is_member(j)) { 
+            codes += M;
+            continue;
+        }
+
         float dis = 0;
         const float* dt = dis_table;
 
@@ -586,8 +596,18 @@ void pq_estimators_from_tables_M4(
         size_t ksub,
         size_t k,
         float* heap_dis,
-        int64_t* heap_ids) {
+        int64_t* heap_ids,
+        const IDSelector* sel) {
+    const IDSelectorBitmapUserDefine* bitmap_user_define_sel = nullptr;
+    if (sel != nullptr) {
+        bitmap_user_define_sel = dynamic_cast<const IDSelectorBitmapUserDefine*>(sel);
+    } 
     for (size_t j = 0; j < ncodes; j++) {
+        if (bitmap_user_define_sel && !bitmap_user_define_sel->is_member(j)) { 
+            codes += 4;
+            continue;
+        }
+
         float dis = 0;
         const float* dt = dis_table;
         dis = dt[*codes++];
@@ -612,23 +632,33 @@ void pq_estimators_from_tables(
         const float* dis_table,
         size_t k,
         float* heap_dis,
-        int64_t* heap_ids) {
+        int64_t* heap_ids,
+        const IDSelector* sel) {
     if (pq.M == 4) {
         pq_estimators_from_tables_M4<CT, C>(
-                codes, ncodes, dis_table, pq.ksub, k, heap_dis, heap_ids);
+                codes, ncodes, dis_table, pq.ksub, k, heap_dis, heap_ids, sel);
         return;
     }
 
     if (pq.M % 4 == 0) {
         pq_estimators_from_tables_Mmul4<CT, C>(
-                pq.M, codes, ncodes, dis_table, pq.ksub, k, heap_dis, heap_ids);
+                pq.M, codes, ncodes, dis_table, pq.ksub, k, heap_dis, heap_ids, sel);
         return;
     }
 
+    const IDSelectorBitmapUserDefine* bitmap_user_define_sel = nullptr;
+    if (sel != nullptr) {
+        bitmap_user_define_sel = dynamic_cast<const IDSelectorBitmapUserDefine*>(sel);
+    } 
     /* Default is relatively slow */
     const size_t M = pq.M;
     const size_t ksub = pq.ksub;
     for (size_t j = 0; j < ncodes; j++) {
+        if (bitmap_user_define_sel && !bitmap_user_define_sel->is_member(j)) {
+            codes += M;
+            continue;
+        }
+
         float dis = 0;
         const float* __restrict dt = dis_table;
         for (int m = 0; m < M; m++) {
@@ -650,10 +680,18 @@ void pq_estimators_from_tables_generic(
         const float* dis_table,
         size_t k,
         float* heap_dis,
-        int64_t* heap_ids) {
+        int64_t* heap_ids,
+        const IDSelector* sel) {
     const size_t M = pq.M;
     const size_t ksub = pq.ksub;
+    const IDSelectorBitmapUserDefine* bitmap_user_define_sel = nullptr;
+    if (sel != nullptr) {
+        bitmap_user_define_sel = dynamic_cast<const IDSelectorBitmapUserDefine*>(sel);
+    } 
     for (size_t j = 0; j < ncodes; ++j) {
+        if (bitmap_user_define_sel && !bitmap_user_define_sel->is_member(j)) {
+            continue;
+        }
         PQDecoderGeneric decoder(codes + j * pq.code_size, nbits);
         float dis = 0;
         const float* __restrict dt = dis_table;
@@ -677,7 +715,8 @@ void pq_knn_search_with_tables(
         const uint8_t* codes,
         const size_t ncodes,
         HeapArray<C>* res,
-        bool init_finalize_heap) {
+        bool init_finalize_heap,
+        const IDSelector* sel) {
     size_t k = res->k, nx = res->nh;
     size_t ksub = pq.ksub, M = pq.M;
 
@@ -697,7 +736,7 @@ void pq_knn_search_with_tables(
         switch (nbits) {
             case 8:
                 pq_estimators_from_tables<uint8_t, C>(
-                        pq, codes, ncodes, dis_table, k, heap_dis, heap_ids);
+                        pq, codes, ncodes, dis_table, k, heap_dis, heap_ids, sel);
                 break;
 
             case 16:
@@ -708,7 +747,8 @@ void pq_knn_search_with_tables(
                         dis_table,
                         k,
                         heap_dis,
-                        heap_ids);
+                        heap_ids,
+                        sel);
                 break;
 
             default:
@@ -720,7 +760,8 @@ void pq_knn_search_with_tables(
                         dis_table,
                         k,
                         heap_dis,
-                        heap_ids);
+                        heap_ids,
+                        sel);
                 break;
         }
 
@@ -738,7 +779,8 @@ void ProductQuantizer::search(
         const uint8_t* codes,
         const size_t ncodes,
         float_maxheap_array_t* res,
-        bool init_finalize_heap) const {
+        bool init_finalize_heap,
+        const IDSelector* sel) const {
     FAISS_THROW_IF_NOT(nx == res->nh);
     std::unique_ptr<float[]> dis_tables(new float[nx * ksub * M]);
     compute_distance_tables(nx, x, dis_tables.get());
@@ -750,7 +792,8 @@ void ProductQuantizer::search(
             codes,
             ncodes,
             res,
-            init_finalize_heap);
+            init_finalize_heap,
+            sel);
 }
 
 void ProductQuantizer::search_ip(
@@ -759,7 +802,8 @@ void ProductQuantizer::search_ip(
         const uint8_t* codes,
         const size_t ncodes,
         float_minheap_array_t* res,
-        bool init_finalize_heap) const {
+        bool init_finalize_heap,
+        const IDSelector* sel) const {
     FAISS_THROW_IF_NOT(nx == res->nh);
     std::unique_ptr<float[]> dis_tables(new float[nx * ksub * M]);
     compute_inner_prod_tables(nx, x, dis_tables.get());
@@ -771,7 +815,8 @@ void ProductQuantizer::search_ip(
             codes,
             ncodes,
             res,
-            init_finalize_heap);
+            init_finalize_heap,
+            sel);
 }
 
 static float sqr(float x) {

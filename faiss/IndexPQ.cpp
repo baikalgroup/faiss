@@ -163,7 +163,7 @@ void IndexPQ::search(
     if (iparams) {
         params = dynamic_cast<const SearchParametersPQ*>(iparams);
         FAISS_THROW_IF_NOT_MSG(params, "invalid search params");
-        FAISS_THROW_IF_NOT_MSG(!params->sel, "selector not supported");
+        //FAISS_THROW_IF_NOT_MSG(!params->sel, "selector not supported");
         search_type = params->search_type;
     }
 
@@ -172,11 +172,11 @@ void IndexPQ::search(
         if (metric_type == METRIC_L2) {
             float_maxheap_array_t res = {
                     size_t(n), size_t(k), labels, distances};
-            pq.search(x, n, codes.data(), ntotal, &res, true);
+            pq.search(x, n, codes.data(), ntotal, &res, true, params ? params->sel : nullptr);
         } else {
             float_minheap_array_t res = {
                     size_t(n), size_t(k), labels, distances};
-            pq.search_ip(x, n, codes.data(), ntotal, &res, true);
+            pq.search_ip(x, n, codes.data(), ntotal, &res, true, params ? params->sel : nullptr);
         }
         indexPQ_stats.nq += n;
         indexPQ_stats.ncode += n * ntotal;
@@ -184,6 +184,7 @@ void IndexPQ::search(
     } else if (
             search_type == ST_polysemous ||
             search_type == ST_polysemous_generalize) {
+        FAISS_THROW_IF_NOT_MSG(!params->sel, "selector not supported");
         FAISS_THROW_IF_NOT(metric_type == METRIC_L2);
         int polysemous_ht =
                 params ? params->polysemous_ht : this->polysemous_ht;
@@ -197,7 +198,7 @@ void IndexPQ::search(
                 search_type == ST_polysemous_generalize);
 
     } else { // code-to-code distances
-
+        FAISS_THROW_IF_NOT_MSG(!params->sel, "selector not supported");
         uint8_t* q_codes = new uint8_t[n * pq.code_size];
         ScopeDeleter<uint8_t> del(q_codes);
 

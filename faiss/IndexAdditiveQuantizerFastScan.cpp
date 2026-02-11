@@ -192,20 +192,20 @@ void IndexAdditiveQuantizerFastScan::search(
         float* distances,
         idx_t* labels,
         const SearchParameters* params) const {
-    FAISS_THROW_IF_NOT_MSG(
-            !params, "search params not supported for this index");
+    // FAISS_THROW_IF_NOT_MSG(
+    //         !params, "search params not supported for this index");
     FAISS_THROW_IF_NOT(k > 0);
     bool rescale = (rescale_norm && norm_scale > 1 && metric_type == METRIC_L2);
     if (!rescale) {
-        IndexFastScan::search(n, x, k, distances, labels);
+        IndexFastScan::search(n, x, k, distances, labels, params);
         return;
     }
 
     NormTableScaler scaler(norm_scale);
     if (metric_type == METRIC_L2) {
-        search_dispatch_implem<true>(n, x, k, distances, labels, scaler);
+        search_dispatch_implem<true>(n, x, k, distances, labels, scaler, params ? params->sel : nullptr);
     } else {
-        search_dispatch_implem<false>(n, x, k, distances, labels, scaler);
+        search_dispatch_implem<false>(n, x, k, distances, labels, scaler, params ? params->sel : nullptr);
     }
 }
 

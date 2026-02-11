@@ -94,7 +94,8 @@ struct IndexFastScan : Index {
             idx_t k,
             float* distances,
             idx_t* labels,
-            const Scaler& scaler) const;
+            const Scaler& scaler,
+            const IDSelector* sel) const;
 
     template <class Cfloat, class Scaler>
     void search_implem_234(
@@ -103,7 +104,8 @@ struct IndexFastScan : Index {
             idx_t k,
             float* distances,
             idx_t* labels,
-            const Scaler& scaler) const;
+            const Scaler& scaler,
+            const IDSelector* sel) const;
 
     template <class C, class Scaler>
     void search_implem_12(
@@ -113,7 +115,8 @@ struct IndexFastScan : Index {
             float* distances,
             idx_t* labels,
             int impl,
-            const Scaler& scaler) const;
+            const Scaler& scaler,
+            const IDSelector* sel) const;
 
     template <class C, class Scaler>
     void search_implem_14(

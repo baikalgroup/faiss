@@ -18,6 +18,8 @@
 #include <faiss/utils/AlignedTable.h>
 #include <faiss/utils/partitioning.h>
 
+#include <faiss/impl/IDSelector.h>
+
 /** This file contains callbacks for kernels that compute distances.
  *
  * The SIMDResultHandler object is intended to be templated and inlined.
@@ -109,12 +111,18 @@ struct SIMDResultHandler {
     const int* q_map;      // map q to global query
     const uint16_t* dbias; // table of biases to add to each query
 
+    const IDSelector* sel = nullptr;
+
     explicit SIMDResultHandler(size_t ntotal)
             : ntotal(ntotal), id_map(nullptr), q_map(nullptr), dbias(nullptr) {}
 
     void set_block_origin(size_t i0, size_t j0) {
         this->i0 = i0;
         this->j0 = j0;
+    }
+
+    void set_sel(const IDSelector* param_sel) {
+        sel = param_sel;
     }
 
     // adjust handler data for IVF.
@@ -212,7 +220,10 @@ struct SingleResultHandler : SIMDResultHandler<C, with_id_map> {
         if (!lt_mask) {
             return;
         }
-
+        const IDSelectorBitmapUserDefine* bitmap_user_define_sel = nullptr;
+        if (this->sel != nullptr) {
+            bitmap_user_define_sel = dynamic_cast<const IDSelectorBitmapUserDefine*>(this->sel);
+        } 
         ALIGNED(32) uint16_t d32tab[32];
         d0.store(d32tab);
         d1.store(d32tab + 16);
@@ -222,9 +233,13 @@ struct SingleResultHandler : SIMDResultHandler<C, with_id_map> {
             int j = __builtin_ctz(lt_mask);
             lt_mask -= 1 << j;
             T dis = d32tab[j];
+            TI idx = this->adjust_id(b, j);
+            if (bitmap_user_define_sel && !bitmap_user_define_sel->is_member(idx)) { 
+                continue;
+            }
             if (C::cmp(res.val, dis)) {
                 res.val = dis;
-                res.id = this->adjust_id(b, j);
+                res.id = idx;
             }
         }
     }
@@ -295,7 +310,10 @@ struct HeapHandler : SIMDResultHandler<C, with_id_map> {
         if (!lt_mask) {
             return;
         }
-
+        const IDSelectorBitmapUserDefine* bitmap_user_define_sel = nullptr;
+        if (this->sel != nullptr) {
+            bitmap_user_define_sel = dynamic_cast<const IDSelectorBitmapUserDefine*>(this->sel);
+        } 
         ALIGNED(32) uint16_t d32tab[32];
         d0.store(d32tab);
         d1.store(d32tab + 16);
@@ -305,8 +323,11 @@ struct HeapHandler : SIMDResultHandler<C, with_id_map> {
             int j = __builtin_ctz(lt_mask);
             lt_mask -= 1 << j;
             T dis = d32tab[j];
+            int64_t idx = this->adjust_id(b, j);
+            if (bitmap_user_define_sel && !bitmap_user_define_sel->is_member(idx)) { 
+                continue;
+            }
             if (C::cmp(heap_dis[0], dis)) {
-                int64_t idx = this->adjust_id(b, j);
                 heap_pop<C>(k, heap_dis, heap_ids);
                 heap_push<C>(k, heap_dis, heap_ids, dis, idx);
             }
@@ -463,6 +484,10 @@ struct ReservoirHandler : SIMDResultHandler<C, with_id_map> {
         if (!lt_mask) {
             return;
         }
+        const IDSelectorBitmapUserDefine* bitmap_user_define_sel = nullptr;
+        if (this->sel != nullptr) {
+            bitmap_user_define_sel = dynamic_cast<const IDSelectorBitmapUserDefine*>(this->sel);
+        } 
         ALIGNED(32) uint16_t d32tab[32];
         d0.store(d32tab);
         d1.store(d32tab + 16);
@@ -472,7 +497,11 @@ struct ReservoirHandler : SIMDResultHandler<C, with_id_map> {
             int j = __builtin_ctz(lt_mask);
             lt_mask -= 1 << j;
             T dis = d32tab[j];
-            res.add(dis, this->adjust_id(b, j));
+            TI idx = this->adjust_id(b, j);
+            if (bitmap_user_define_sel != nullptr && !bitmap_user_define_sel->is_member(idx)) {
+                continue;
+            }
+            res.add(dis, idx);
         }
         times[1] += get_cy() - t1;
     }
